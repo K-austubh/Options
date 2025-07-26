@@ -333,8 +333,8 @@ class BloombergAPIProvider:
 
         if not self._use_mock:
             raise NotImplementedError("Bloomberg API integration not implemented. Implement _fetch_bloomberg_price().")
-        else:
-            spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
+        
+        spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
 
         # Security: Validate output data
         validated_price = InputValidator.validate_numeric_parameter(
@@ -890,14 +890,14 @@ class TestMonteCarloOptionPricer:
         
         # Test parameter bounds enforcement
         with pytest.raises(SecurityError):
-            params_invalid = OptionParameters(-100.0, 0.25, 'call')  # Negative strike
+            OptionParameters(-100.0, 0.25, 'call')  # Negative strike
         
         with pytest.raises(SecurityError):
-            params_invalid = OptionParameters(150.0, 20.0, 'call')  # 20 years expiry
+            OptionParameters(150.0, 20.0, 'call')  # 20 years expiry
         
         # Test invalid option type (injection attempt)
         with pytest.raises(SecurityError):
-            params_invalid = OptionParameters(150.0, 0.25, "'; DROP TABLE; --")
+            OptionParameters(150.0, 0.25, "'; DROP TABLE; --")
     
     def test_barrier_option_security_validation(self, pricer: MonteCarloOptionPricer) -> None:
         """Test barrier option security validation."""
@@ -917,7 +917,7 @@ class TestMonteCarloOptionPricer:
         
         # Test missing barrier parameters
         with pytest.raises(SecurityError):
-            params_invalid = OptionParameters(150.0, 0.25, 'call', barrier=160.0)  # Missing type
+            OptionParameters(150.0, 0.25, 'call', barrier=160.0)  # Missing type
     
     def test_output_validation(self, pricer: MonteCarloOptionPricer) -> None:
         """Test that output values are validated for security."""
