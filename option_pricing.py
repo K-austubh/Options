@@ -334,11 +334,7 @@ class BloombergAPIProvider:
         # Security: Validate symbol before any processing
         validated_symbol = InputValidator.validate_symbol(symbol)
         
-        # Currently using mock data for both mock and production modes
-        # In production, uncomment the Bloomberg API call below
-        # if not self._use_mock:
-        #     spot_price = self._fetch_bloomberg_price(validated_symbol)
-        # else:
+        # TODO: Implement Bloomberg API call for production use here
         spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
         
         # Security: Validate output data
