@@ -408,14 +408,13 @@ class MonteCarloOptionPricer:
             SecurityError: If random_seed is outside valid range
         """
         self._market_data = market_data
-        
         if random_seed is not None:
             validated_seed = InputValidator.validate_integer_parameter(
                 random_seed, 'random_seed', 0, 2**32 - 1
             )
-            np.random.seed(validated_seed)
-            random.seed(validated_seed)
-        
+            self._rng = np.random.default_rng(validated_seed)
+        else:
+            self._rng = np.random.default_rng()
         logger.info("Monte Carlo option pricer initialized with security controls")
 
     def price_european_option(
@@ -476,11 +475,11 @@ class MonteCarloOptionPricer:
             
             if use_antithetic:
                 n_pairs = validated_sims // 2
-                z_random = np.random.standard_normal(n_pairs)
+                z_random = self._rng.standard_normal(n_pairs)
                 z_combined = np.concatenate([z_random, -z_random])
                 effective_sims = 2 * n_pairs
             else:
-                z_combined = np.random.standard_normal(validated_sims)
+                z_combined = self._rng.standard_normal(validated_sims)
                 effective_sims = validated_sims
             
             terminal_prices = spot * np.exp(drift + diffusion * z_combined)
@@ -600,7 +599,7 @@ class MonteCarloOptionPricer:
             diffusion = volatility * math.sqrt(dt)
             
             # Generate random increments with memory management
-            random_increments = np.random.standard_normal((validated_sims, validated_steps))
+            random_increments = self._rng.standard_normal((validated_sims, validated_steps))
             log_returns = drift + diffusion * random_increments
             
             # Build cumulative log price paths
