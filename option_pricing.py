@@ -90,19 +90,34 @@ class InputValidator:
         sanitized = symbol.strip().upper()
         
         # Length validation (defense in depth)
-        if not (1 <= len(sanitized) <= 10):
+        if not InputValidator._is_valid_symbol_length(sanitized):
             raise SecurityError(f"Symbol length must be 1-10 characters, got {len(sanitized)}")
         
         # Strict allowlist validation using regex
-        if not InputValidator.SYMBOL_PATTERN.match(sanitized):
+        if not InputValidator._is_valid_symbol_format(sanitized):
             raise SecurityError(f"Invalid symbol format: {sanitized}. Only A-Z characters allowed")
         
         # Additional security check - no reserved keywords
-        reserved_keywords = {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DROP', 'UNION', 'EXEC', 'SCRIPT'}
-        if sanitized in reserved_keywords:
+        if InputValidator._is_reserved_keyword(sanitized):
             raise SecurityError(f"Symbol cannot be reserved keyword: {sanitized}")
         
         return sanitized
+
+    @staticmethod
+    def _is_valid_symbol_length(sanitized: str) -> bool:
+        """Check if symbol length is within valid range."""
+        return 1 <= len(sanitized) <= 10
+
+    @staticmethod
+    def _is_valid_symbol_format(sanitized: str) -> bool:
+        """Check if symbol format matches allowed pattern."""
+        return InputValidator.SYMBOL_PATTERN.match(sanitized) is not None
+
+    @staticmethod
+    def _is_reserved_keyword(sanitized: str) -> bool:
+        """Check if symbol is a reserved keyword."""
+        reserved_keywords = {'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'DROP', 'UNION', 'EXEC', 'SCRIPT'}
+        return sanitized in reserved_keywords
     
     @staticmethod
     def validate_option_type(option_type: str) -> str:
@@ -173,18 +188,33 @@ class InputValidator:
         Raises:
             SecurityError: If value is outside bounds or invalid
         """
-        if not isinstance(value, (int, float)):
+        if not InputValidator._is_numeric_type(value):
             raise SecurityError(f"{param_name} must be numeric, got {type(value).__name__}")
         
         # Check for NaN and infinity (potential DoS vectors)
-        if not math.isfinite(value):
+        if not InputValidator._is_finite_value(value):
             raise SecurityError(f"{param_name} must be finite, got {value}")
         
         # Bounds validation
-        if not (min_val <= value <= max_val):
+        if not InputValidator._is_within_bounds(value, min_val, max_val):
             raise SecurityError(f"{param_name} must be between {min_val} and {max_val}, got {value}")
         
         return float(value)
+
+    @staticmethod
+    def _is_numeric_type(value: float) -> bool:
+        """Check if value is numeric type."""
+        return isinstance(value, (int, float))
+
+    @staticmethod
+    def _is_finite_value(value: float) -> bool:
+        """Check if value is finite (not NaN or infinity)."""
+        return math.isfinite(value)
+
+    @staticmethod
+    def _is_within_bounds(value: float, min_val: float, max_val: float) -> bool:
+        """Check if value is within specified bounds."""
+        return min_val <= value <= max_val
     
     @staticmethod
     def validate_integer_parameter(value: int, param_name: str, min_val: int, max_val: int) -> int:
@@ -202,13 +232,18 @@ class InputValidator:
         Raises:
             SecurityError: If value is outside bounds or invalid
         """
-        if not isinstance(value, int):
+        if not InputValidator._is_integer_type(value):
             raise SecurityError(f"{param_name} must be integer, got {type(value).__name__}")
         
-        if not (min_val <= value <= max_val):
+        if not InputValidator._is_within_bounds(value, min_val, max_val):
             raise SecurityError(f"{param_name} must be between {min_val} and {max_val}, got {value}")
         
         return value
+
+    @staticmethod
+    def _is_integer_type(value: int) -> bool:
+        """Check if value is integer type."""
+        return isinstance(value, int)
 
 
 class MarketDataProvider(Protocol):
@@ -497,9 +532,13 @@ class MonteCarloOptionPricer:
             for key, value in result.items():
                 if not math.isfinite(value):
                     raise SecurityError(f"Invalid calculation result: {key} = {value}")
-                if value < 0 and key in ('price', 'standard_error', 'confidence_interval_95'):
+                if _is_invalid_negative_value(key, value):
                     raise SecurityError(f"Negative value not allowed for {key}: {value}")
             return result
+        
+        def _is_invalid_negative_value(key: str, value: float) -> bool:
+            """Check if a negative value is invalid for the given key."""
+            return value < 0 and key in ('price', 'standard_error', 'confidence_interval_95')
         
         validated_symbol, validated_sims = _validate_inputs()
         spot, volatility, risk_free_rate = _get_market_data(validated_symbol)
@@ -585,14 +624,30 @@ class MonteCarloOptionPricer:
             return validated_symbol, validated_sims, validated_steps
         
         def _validate_barrier_inputs() -> None:
-            if params.barrier is None or params.barrier_type is None:
+            if _is_missing_barrier_parameters(params):
                 raise SecurityError("Barrier level and type must be specified for barrier options")
             
             # Additional barrier validation
-            if params.barrier_type == 'up_and_out' and params.barrier <= params.strike:
+            _log_barrier_warnings(params)
+
+        def _is_missing_barrier_parameters(params: OptionParameters) -> bool:
+            """Check if barrier parameters are missing."""
+            return params.barrier is None or params.barrier_type is None
+
+        def _log_barrier_warnings(params: OptionParameters) -> None:
+            """Log warnings for potentially problematic barrier configurations."""
+            if _is_up_and_out_barrier_below_strike(params):
                 logger.warning("Up-and-out barrier below strike may result in zero value")
-            elif params.barrier_type == 'down_and_out' and params.barrier >= params.strike:
+            elif _is_down_and_out_barrier_above_strike(params):
                 logger.warning("Down-and-out barrier above strike may result in zero value")
+
+        def _is_up_and_out_barrier_below_strike(params: OptionParameters) -> bool:
+            """Check if up-and-out barrier is below strike price."""
+            return params.barrier_type == 'up_and_out' and params.barrier <= params.strike
+
+        def _is_down_and_out_barrier_above_strike(params: OptionParameters) -> bool:
+            """Check if down-and-out barrier is above strike price."""
+            return params.barrier_type == 'down_and_out' and params.barrier >= params.strike
         
         def _simulate_price_paths(validated_sims: int, validated_steps: int) -> tuple[np.ndarray, np.ndarray]:
             dt = params.expiry / validated_steps
@@ -635,14 +690,22 @@ class MonteCarloOptionPricer:
             for key, value in result.items():
                 if not math.isfinite(value):
                     raise SecurityError(f"Invalid calculation result: {key} = {value}")
-                if value < 0 and key != 'price':  # Price can be zero for knocked-out options
+                if _is_invalid_barrier_negative_value(key, value):
                     raise SecurityError(f"Negative value not allowed for {key}: {value}")
             
             # Validate breach probability is in [0,1]
-            if not (0 <= result['breach_probability'] <= 1):
+            if not _is_valid_breach_probability(result['breach_probability']):
                 raise SecurityError(f"Invalid breach probability: {result['breach_probability']}")
             
             return result
+
+        def _is_invalid_barrier_negative_value(key: str, value: float) -> bool:
+            """Check if a negative value is invalid for barrier option results."""
+            return value < 0 and key != 'price'  # Price can be zero for knocked-out options
+
+        def _is_valid_breach_probability(probability: float) -> bool:
+            """Check if breach probability is within valid range [0,1]."""
+            return 0 <= probability <= 1
         
         validated_symbol, validated_sims, validated_steps = _validate_inputs()
         _validate_barrier_inputs()
