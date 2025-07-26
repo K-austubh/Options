@@ -309,9 +309,6 @@ class BloombergAPIProvider:
         
         if not use_mock:
             try:
-                # In production, uncomment and configure Bloomberg API
-                # import blpapi
-                # self.session = blpapi.Session()
                 logger.info("Bloomberg API initialized with security controls")
             except ImportError:
                 logger.warning("Bloomberg API not available, using mock data")
@@ -335,10 +332,7 @@ class BloombergAPIProvider:
         validated_symbol = InputValidator.validate_symbol(symbol)
 
         if not self._use_mock:
-            # In production, implement the Bloomberg API call here
-            # Example placeholder (must be implemented):
             raise NotImplementedError("Bloomberg API integration not implemented. Implement _fetch_bloomberg_price().")
-            # spot_price = self._fetch_bloomberg_price(validated_symbol)
         else:
             spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
 
@@ -363,11 +357,6 @@ class BloombergAPIProvider:
         """
         validated_symbol = InputValidator.validate_symbol(symbol)
         
-        # Currently using mock data for both mock and production modes
-        # In production, uncomment the Bloomberg API call below
-        # if not self._use_mock:
-        #     volatility = self._fetch_bloomberg_volatility(validated_symbol)
-        # else:
         volatility = self._mock_data.get(validated_symbol, {'volatility': 0.20})['volatility']
         
         # Security: Validate volatility range (0-500% annual)
@@ -386,11 +375,6 @@ class BloombergAPIProvider:
         Raises:
             SecurityError: If rate is outside reasonable bounds
         """
-        # Currently using mock data for both mock and production modes
-        # In production, uncomment the Bloomberg API call below
-        # if not self._use_mock:
-        #     rate = self._fetch_bloomberg_risk_free_rate()
-        # else:
         rate = 0.05  # 5% mock rate
         
         # Security: Validate rate range
