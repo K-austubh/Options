@@ -335,12 +335,12 @@ class BloombergAPIProvider:
             raise NotImplementedError("Bloomberg API integration not implemented. Implement _fetch_bloomberg_price().")
         
         spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
-
+        
         # Security: Validate output data
         validated_price = InputValidator.validate_numeric_parameter(
             spot_price, 'spot_price', 0.01, 1_000_000.0
         )
-
+        
         return validated_price
     
     def get_volatility(self, symbol: str) -> float:
@@ -452,91 +452,85 @@ class MonteCarloOptionPricer:
         Raises:
             SecurityError: If any input fails security validation
         """
-        validated_symbol, validated_sims = self._validate_european_inputs(symbol, n_simulations)
-        spot, volatility, risk_free_rate = self._get_market_data(validated_symbol)
+        def _validate_inputs() -> tuple[str, int]:
+            # Security: Validate all inputs
+            validated_symbol = InputValidator.validate_symbol(symbol)
+            validated_sims = InputValidator.validate_integer_parameter(
+                n_simulations, 'n_simulations', 
+                InputValidator.MIN_SIMULATIONS, InputValidator.MAX_SIMULATIONS
+            )
+            
+            # OptionParameters are already validated in their constructor
+            return validated_symbol, validated_sims
+        
+        def _get_market_data(validated_symbol: str) -> tuple[float, float, float]:
+            spot = self._market_data.get_spot_price(validated_symbol)
+            volatility = self._market_data.get_volatility(validated_symbol)
+            risk_free_rate = self._market_data.get_risk_free_rate()
+            return spot, volatility, risk_free_rate
+        
+        def _simulate_terminal_prices(validated_sims: int) -> np.ndarray:
+            # Geometric Brownian Motion simulation with security bounds
+            drift = (risk_free_rate - 0.5 * volatility**2) * params.expiry
+            diffusion = volatility * math.sqrt(params.expiry)
+            
+            if use_antithetic:
+                n_pairs = validated_sims // 2
+                z_random = self._rng.standard_normal(n_pairs)
+                z_combined = np.concatenate([z_random, -z_random])
+                effective_sims = 2 * n_pairs
+            else:
+                z_combined = self._rng.standard_normal(validated_sims)
+                effective_sims = validated_sims
+            
+            terminal_prices = spot * np.exp(drift + diffusion * z_combined)
+            return terminal_prices[:effective_sims]
+        
+        def _calculate_payoffs(terminal_prices: np.ndarray) -> np.ndarray:
+            if params.option_type == 'call':
+                return np.maximum(terminal_prices - params.strike, 0)
+            else:  # put option
+                return np.maximum(params.strike - terminal_prices, 0)
+        
+        def _validate_output(result: dict[str, float]) -> dict[str, float]:
+            """Validate output data for security and sanity."""
+            for key, value in result.items():
+                if not math.isfinite(value):
+                    raise SecurityError(f"Invalid calculation result: {key} = {value}")
+                if value < 0 and key in ('price', 'standard_error', 'confidence_interval_95'):
+                    raise SecurityError(f"Negative value not allowed for {key}: {value}")
+            return result
+        
+        validated_symbol, validated_sims = _validate_inputs()
+        spot, volatility, risk_free_rate = _get_market_data(validated_symbol)
         
         logger.info(f"Pricing {params.option_type} option: {validated_symbol} strike={params.strike}")
         
-        terminal_prices = self._simulate_european_terminal_prices(
-            validated_sims, spot, volatility, risk_free_rate, params.expiry, use_antithetic
-        )
-        payoffs = self._calculate_european_payoffs(terminal_prices, params)
-        discounted_payoffs = self._discount_payoffs(payoffs, risk_free_rate, params.expiry)
+        terminal_prices = _simulate_terminal_prices(validated_sims)
+        payoffs = _calculate_payoffs(terminal_prices)
         
-        result = self._calculate_european_statistics(discounted_payoffs)
-        validated_result = self._validate_european_output(result)
+        # Discount to present value
+        discount_factor = math.exp(-risk_free_rate * params.expiry)
+        discounted_payoffs = payoffs * discount_factor
         
-        logger.info(f"Option price calculated: {result['price']:.4f} ± {result['standard_error']:.4f}")
-        
-        return validated_result
-
-    def _validate_european_inputs(self, symbol: str, n_simulations: int) -> tuple[str, int]:
-        """Validate inputs for European option pricing."""
-        validated_symbol = InputValidator.validate_symbol(symbol)
-        validated_sims = InputValidator.validate_integer_parameter(
-            n_simulations, 'n_simulations', 
-            InputValidator.MIN_SIMULATIONS, InputValidator.MAX_SIMULATIONS
-        )
-        return validated_symbol, validated_sims
-
-    def _simulate_european_terminal_prices(
-        self, 
-        validated_sims: int, 
-        spot: float, 
-        volatility: float, 
-        risk_free_rate: float, 
-        expiry: float, 
-        use_antithetic: bool
-    ) -> np.ndarray:
-        """Simulate terminal prices for European option using Geometric Brownian Motion."""
-        drift = (risk_free_rate - 0.5 * volatility**2) * expiry
-        diffusion = volatility * math.sqrt(expiry)
-        
-        if use_antithetic:
-            n_pairs = validated_sims // 2
-            z_random = self._rng.standard_normal(n_pairs)
-            z_combined = np.concatenate([z_random, -z_random])
-            effective_sims = 2 * n_pairs
-        else:
-            z_combined = self._rng.standard_normal(validated_sims)
-            effective_sims = validated_sims
-        
-        terminal_prices = spot * np.exp(drift + diffusion * z_combined)
-        return terminal_prices[:effective_sims]
-
-    def _calculate_european_payoffs(self, terminal_prices: np.ndarray, params: OptionParameters) -> np.ndarray:
-        """Calculate option payoffs based on terminal prices and option type."""
-        if params.option_type == 'call':
-            return np.maximum(terminal_prices - params.strike, 0)
-        else:  # put option
-            return np.maximum(params.strike - terminal_prices, 0)
-
-    def _discount_payoffs(self, payoffs: np.ndarray, risk_free_rate: float, expiry: float) -> np.ndarray:
-        """Discount payoffs to present value."""
-        discount_factor = math.exp(-risk_free_rate * expiry)
-        return payoffs * discount_factor
-
-    def _calculate_european_statistics(self, discounted_payoffs: np.ndarray) -> dict[str, float]:
-        """Calculate pricing statistics from discounted payoffs."""
+        # Calculate statistics
         option_price = float(np.mean(discounted_payoffs))
         standard_error = float(np.std(discounted_payoffs) / math.sqrt(len(discounted_payoffs)))
         confidence_interval = 1.96 * standard_error
         
-        return {
+        result = {
             'price': option_price,
             'standard_error': standard_error,
             'confidence_interval_95': confidence_interval,
             'simulations_used': len(discounted_payoffs)
         }
-
-    def _validate_european_output(self, result: dict[str, float]) -> dict[str, float]:
-        """Validate output data for security and sanity."""
-        for key, value in result.items():
-            if not math.isfinite(value):
-                raise SecurityError(f"Invalid calculation result: {key} = {value}")
-            if value < 0 and key in ('price', 'standard_error', 'confidence_interval_95'):
-                raise SecurityError(f"Negative value not allowed for {key}: {value}")
-        return result
+        
+        # Security: Validate output before returning
+        validated_result = _validate_output(result)
+        
+        logger.info(f"Option price calculated: {option_price:.4f} ± {standard_error:.4f}")
+        
+        return validated_result
 
     def price_barrier_option(
         self,
@@ -572,141 +566,117 @@ class MonteCarloOptionPricer:
         Raises:
             SecurityError: If inputs fail validation or barrier params missing
         """
-        validated_symbol, validated_sims, validated_steps = self._validate_barrier_inputs(
-            symbol, n_simulations, n_time_steps
-        )
-        self._validate_barrier_parameters(params)
+        def _validate_inputs() -> tuple[str, int, int]:
+            validated_symbol = InputValidator.validate_symbol(symbol)
+            validated_sims = InputValidator.validate_integer_parameter(
+                n_simulations, 'n_simulations',
+                InputValidator.MIN_SIMULATIONS, InputValidator.MAX_SIMULATIONS
+            )
+            validated_steps = InputValidator.validate_integer_parameter(
+                n_time_steps, 'n_time_steps',
+                InputValidator.MIN_TIME_STEPS, InputValidator.MAX_TIME_STEPS
+            )
+            
+            # Security: Check computational complexity bounds (DoS prevention)
+            total_operations = validated_sims * validated_steps
+            if total_operations > 100_000_000:  # 100M operations max
+                raise SecurityError(f"Computational complexity too high: {total_operations} operations")
+            
+            return validated_symbol, validated_sims, validated_steps
+        
+        def _validate_barrier_inputs() -> None:
+            if params.barrier is None or params.barrier_type is None:
+                raise SecurityError("Barrier level and type must be specified for barrier options")
+            
+            # Additional barrier validation
+            if params.barrier_type == 'up_and_out' and params.barrier <= params.strike:
+                logger.warning("Up-and-out barrier below strike may result in zero value")
+            elif params.barrier_type == 'down_and_out' and params.barrier >= params.strike:
+                logger.warning("Down-and-out barrier above strike may result in zero value")
+        
+        def _simulate_price_paths(validated_sims: int, validated_steps: int) -> tuple[np.ndarray, np.ndarray]:
+            dt = params.expiry / validated_steps
+            drift = (risk_free_rate - 0.5 * volatility**2) * dt
+            diffusion = volatility * math.sqrt(dt)
+            
+            # Generate random increments with memory management
+            random_increments = self._rng.standard_normal((validated_sims, validated_steps))
+            log_returns = drift + diffusion * random_increments
+            
+            # Build cumulative log price paths
+            cumulative_log_returns = np.cumsum(log_returns, axis=1)
+            initial_log_price = math.log(spot)
+            log_prices = initial_log_price + cumulative_log_returns
+            
+            price_paths = np.exp(log_prices)
+            terminal_prices = price_paths[:, -1]
+            
+            return price_paths, terminal_prices
+        
+        def _check_barrier_breach(price_paths: np.ndarray) -> np.ndarray:
+            if params.barrier_type == 'up_and_out':
+                breach_occurred = np.any(price_paths >= params.barrier, axis=1)
+            else:  # down_and_out
+                breach_occurred = np.any(price_paths <= params.barrier, axis=1)
+            
+            return ~breach_occurred  # Return True for non-breached paths
+        
+        def _calculate_barrier_payoffs(terminal_prices: np.ndarray, active_paths: np.ndarray) -> np.ndarray:
+            if params.option_type == 'call':
+                vanilla_payoffs = np.maximum(terminal_prices - params.strike, 0)
+            else:  # put option
+                vanilla_payoffs = np.maximum(params.strike - terminal_prices, 0)
+            
+            # Zero payoff for breached barriers
+            return vanilla_payoffs * active_paths
+        
+        def _validate_output(result: dict[str, float]) -> dict[str, float]:
+            """Validate barrier option output."""
+            for key, value in result.items():
+                if not math.isfinite(value):
+                    raise SecurityError(f"Invalid calculation result: {key} = {value}")
+                if value < 0 and key != 'price':  # Price can be zero for knocked-out options
+                    raise SecurityError(f"Negative value not allowed for {key}: {value}")
+            
+            # Validate breach probability is in [0,1]
+            if not (0 <= result['breach_probability'] <= 1):
+                raise SecurityError(f"Invalid breach probability: {result['breach_probability']}")
+            
+            return result
+        
+        validated_symbol, validated_sims, validated_steps = _validate_inputs()
+        _validate_barrier_inputs()
         spot, volatility, risk_free_rate = self._get_market_data(validated_symbol)
         
         logger.info(f"Pricing {params.barrier_type} barrier option: {validated_symbol}")
         
-        price_paths, terminal_prices = self._simulate_barrier_price_paths(
-            validated_sims, validated_steps, spot, volatility, risk_free_rate, params.expiry
-        )
-        active_paths = self._check_barrier_breach(price_paths, params)
-        payoffs = self._calculate_barrier_payoffs(terminal_prices, active_paths, params)
-        discounted_payoffs = self._discount_payoffs(payoffs, risk_free_rate, params.expiry)
+        price_paths, terminal_prices = _simulate_price_paths(validated_sims, validated_steps)
+        active_paths = _check_barrier_breach(price_paths)
+        payoffs = _calculate_barrier_payoffs(terminal_prices, active_paths)
         
-        result = self._calculate_barrier_statistics(discounted_payoffs, active_paths)
-        validated_result = self._validate_barrier_output(result)
+        # Discount to present value
+        discount_factor = math.exp(-risk_free_rate * params.expiry)
+        discounted_payoffs = payoffs * discount_factor
         
-        logger.info(f"Barrier option price: {result['price']:.4f}, breach prob: {result['breach_probability']:.4f}")
-        
-        return validated_result
-
-    def _validate_barrier_inputs(self, symbol: str, n_simulations: int, n_time_steps: int) -> tuple[str, int, int]:
-        """Validate inputs for barrier option pricing."""
-        validated_symbol = InputValidator.validate_symbol(symbol)
-        validated_sims = InputValidator.validate_integer_parameter(
-            n_simulations, 'n_simulations',
-            InputValidator.MIN_SIMULATIONS, InputValidator.MAX_SIMULATIONS
-        )
-        validated_steps = InputValidator.validate_integer_parameter(
-            n_time_steps, 'n_time_steps',
-            InputValidator.MIN_TIME_STEPS, InputValidator.MAX_TIME_STEPS
-        )
-        
-        # Security: Check computational complexity bounds (DoS prevention)
-        total_operations = validated_sims * validated_steps
-        if total_operations > 100_000_000:  # 100M operations max
-            raise SecurityError(f"Computational complexity too high: {total_operations} operations")
-        
-        return validated_symbol, validated_sims, validated_steps
-
-    def _validate_barrier_parameters(self, params: OptionParameters) -> None:
-        """Validate barrier-specific parameters."""
-        if params.barrier is None or params.barrier_type is None:
-            raise SecurityError("Barrier level and type must be specified for barrier options")
-        
-        # Additional barrier validation
-        if params.barrier_type == 'up_and_out' and params.barrier <= params.strike:
-            logger.warning("Up-and-out barrier below strike may result in zero value")
-        elif params.barrier_type == 'down_and_out' and params.barrier >= params.strike:
-            logger.warning("Down-and-out barrier above strike may result in zero value")
-
-    def _simulate_barrier_price_paths(
-        self, 
-        validated_sims: int, 
-        validated_steps: int, 
-        spot: float, 
-        volatility: float, 
-        risk_free_rate: float, 
-        expiry: float
-    ) -> tuple[np.ndarray, np.ndarray]:
-        """Simulate price paths for barrier option monitoring."""
-        dt = expiry / validated_steps
-        drift = (risk_free_rate - 0.5 * volatility**2) * dt
-        diffusion = volatility * math.sqrt(dt)
-        
-        # Generate random increments with memory management
-        random_increments = self._rng.standard_normal((validated_sims, validated_steps))
-        log_returns = drift + diffusion * random_increments
-        
-        # Build cumulative log price paths
-        cumulative_log_returns = np.cumsum(log_returns, axis=1)
-        initial_log_price = math.log(spot)
-        log_prices = initial_log_price + cumulative_log_returns
-        
-        price_paths = np.exp(log_prices)
-        terminal_prices = price_paths[:, -1]
-        
-        return price_paths, terminal_prices
-
-    def _check_barrier_breach(self, price_paths: np.ndarray, params: OptionParameters) -> np.ndarray:
-        """Check if barrier has been breached during the option's life."""
-        if params.barrier_type == 'up_and_out':
-            breach_occurred = np.any(price_paths >= params.barrier, axis=1)
-        else:  # down_and_out
-            breach_occurred = np.any(price_paths <= params.barrier, axis=1)
-        
-        return ~breach_occurred  # Return True for non-breached paths
-
-    def _calculate_barrier_payoffs(
-        self, 
-        terminal_prices: np.ndarray, 
-        active_paths: np.ndarray, 
-        params: OptionParameters
-    ) -> np.ndarray:
-        """Calculate barrier option payoffs considering barrier breaches."""
-        if params.option_type == 'call':
-            vanilla_payoffs = np.maximum(terminal_prices - params.strike, 0)
-        else:  # put option
-            vanilla_payoffs = np.maximum(params.strike - terminal_prices, 0)
-        
-        # Zero payoff for breached barriers
-        return vanilla_payoffs * active_paths
-
-    def _calculate_barrier_statistics(
-        self, 
-        discounted_payoffs: np.ndarray, 
-        active_paths: np.ndarray
-    ) -> dict[str, float]:
-        """Calculate barrier option pricing statistics."""
+        # Calculate statistics
         option_price = float(np.mean(discounted_payoffs))
         standard_error = float(np.std(discounted_payoffs) / math.sqrt(len(discounted_payoffs)))
         breach_probability = float(1 - np.mean(active_paths))
         
-        return {
+        result = {
             'price': option_price,
             'standard_error': standard_error,
             'confidence_interval_95': 1.96 * standard_error,
             'breach_probability': breach_probability,
             'simulations_used': len(discounted_payoffs)
         }
-
-    def _validate_barrier_output(self, result: dict[str, float]) -> dict[str, float]:
-        """Validate barrier option output."""
-        for key, value in result.items():
-            if not math.isfinite(value):
-                raise SecurityError(f"Invalid calculation result: {key} = {value}")
-            if value < 0 and key != 'price':  # Price can be zero for knocked-out options
-                raise SecurityError(f"Negative value not allowed for {key}: {value}")
         
-        # Validate breach probability is in [0,1]
-        if not (0 <= result['breach_probability'] <= 1):
-            raise SecurityError(f"Invalid breach probability: {result['breach_probability']}")
+        # Security: Validate output
+        validated_result = _validate_output(result)
         
-        return result
+        logger.info(f"Barrier option price: {option_price:.4f}, breach prob: {breach_probability:.4f}")
+        
+        return validated_result
 
     def _get_market_data(self, symbol: str) -> tuple[float, float, float]:
         """Internal helper for consistent market data retrieval with validation."""
@@ -1039,7 +1009,13 @@ if __name__ == "__main__":
     
     # Run tests if pytest is available
     try:
-        pytest.main([__file__, "-v"])
+        # Use a more robust approach to get the current file path
+        import os
+        current_file = os.path.abspath(__file__) if '__file__' in globals() else None
+        if current_file and os.path.exists(current_file):
+            pytest.main([current_file, "-v"])
+        else:
+            logger.info("Running tests in interactive mode - skipping file-based test execution")
     except ImportError:
         logger.warning("pytest not available, skipping automated tests")
         logger.info("Install pytest to run comprehensive test suite: pip install pytest")
