@@ -334,12 +334,12 @@ class BloombergAPIProvider:
         # Security: Validate symbol before any processing
         validated_symbol = InputValidator.validate_symbol(symbol)
         
-        if self._use_mock:
-            spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
-        else:
-            # Production Bloomberg implementation would go here
-            # spot_price = self._fetch_bloomberg_price(validated_symbol)
-            spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
+        # Currently using mock data for both mock and production modes
+        # In production, uncomment the Bloomberg API call below
+        # if not self._use_mock:
+        #     spot_price = self._fetch_bloomberg_price(validated_symbol)
+        # else:
+        spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
         
         # Security: Validate output data
         validated_price = InputValidator.validate_numeric_parameter(
@@ -362,11 +362,12 @@ class BloombergAPIProvider:
         """
         validated_symbol = InputValidator.validate_symbol(symbol)
         
-        if self._use_mock:
-            volatility = self._mock_data.get(validated_symbol, {'volatility': 0.20})['volatility']
-        else:
-            # Production Bloomberg implementation would go here
-            volatility = self._mock_data.get(validated_symbol, {'volatility': 0.20})['volatility']
+        # Currently using mock data for both mock and production modes
+        # In production, uncomment the Bloomberg API call below
+        # if not self._use_mock:
+        #     volatility = self._fetch_bloomberg_volatility(validated_symbol)
+        # else:
+        volatility = self._mock_data.get(validated_symbol, {'volatility': 0.20})['volatility']
         
         # Security: Validate volatility range (0-500% annual)
         validated_volatility = InputValidator.validate_numeric_parameter(
@@ -384,11 +385,12 @@ class BloombergAPIProvider:
         Raises:
             SecurityError: If rate is outside reasonable bounds
         """
-        if self._use_mock:
-            rate = 0.05  # 5% mock rate
-        else:
-            # Production: fetch from Bloomberg fixed income data
-            rate = 0.05
+        # Currently using mock data for both mock and production modes
+        # In production, uncomment the Bloomberg API call below
+        # if not self._use_mock:
+        #     rate = self._fetch_bloomberg_risk_free_rate()
+        # else:
+        rate = 0.05  # 5% mock rate
         
         # Security: Validate rate range
         validated_rate = InputValidator.validate_numeric_parameter(
