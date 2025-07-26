@@ -747,7 +747,8 @@ class TestInputValidator:
     def test_numeric_parameter_validation(self) -> None:
         """Test numeric parameter bounds checking."""
         # Valid values
-        assert InputValidator.validate_numeric_parameter(100.0, "test", 1.0, 1000.0) == 100.0
+        result = InputValidator.validate_numeric_parameter(100.0, "test", 1.0, 1000.0)
+        assert abs(result - 100.0) < 1e-10  # Use tolerance-based comparison
         
         # Out of bounds
         with pytest.raises(SecurityError):
@@ -767,7 +768,7 @@ class TestInputValidator:
         """Test that OptionParameters constructor validates all inputs."""
         # Valid parameters
         params = OptionParameters(150.0, 0.25, 'call')
-        assert params.strike == 150.0
+        assert abs(params.strike - 150.0) < 1e-10  # Use tolerance-based comparison
         assert params.option_type == 'call'
         
         # Invalid strike (negative)
