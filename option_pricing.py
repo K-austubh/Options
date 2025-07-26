@@ -414,7 +414,8 @@ class MonteCarloOptionPricer:
             )
             self._rng = np.random.default_rng(validated_seed)
         else:
-            self._rng = np.random.default_rng()
+            # Use a default seed for reproducible results
+            self._rng = np.random.default_rng(42)
         logger.info("Monte Carlo option pricer initialized with security controls")
 
     def price_european_option(
