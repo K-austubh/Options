@@ -333,15 +333,20 @@ class BloombergAPIProvider:
         """
         # Security: Validate symbol before any processing
         validated_symbol = InputValidator.validate_symbol(symbol)
-        
-        # TODO: Implement Bloomberg API call for production use here
-        spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
-        
+
+        if not self._use_mock:
+            # In production, implement the Bloomberg API call here
+            # Example placeholder (must be implemented):
+            raise NotImplementedError("Bloomberg API integration not implemented. Implement _fetch_bloomberg_price().")
+            # spot_price = self._fetch_bloomberg_price(validated_symbol)
+        else:
+            spot_price = self._mock_data.get(validated_symbol, {'spot': 100.0})['spot']
+
         # Security: Validate output data
         validated_price = InputValidator.validate_numeric_parameter(
             spot_price, 'spot_price', 0.01, 1_000_000.0
         )
-        
+
         return validated_price
     
     def get_volatility(self, symbol: str) -> float:
